@@ -71,29 +71,28 @@ begin
   end if;
 
   --TABLE
-  rez := rez||'CREATE TABLE '||l_table_name||'('||chr(10);
-  for rec in select concat(concat('  ,',att.attname),' '
-                   ,case tp.typname 
-                      when 'int2' then 'smallint' 
-                      when 'int4' then 'integer' 
-                      when 'int8' then 'bigint' 
-                      when 'varchar' then 'character varying' 
-                      when 'timestamp' then 'timestamp without time zone' 
-                      when 'timestamptz' then 'timestamp with time zone' 
-                      else tp.typname 
-                    end,' '
-                   ,case att.atttypmod 
-                      when -1 then '' 
-                      else concat('(',(att.atttypmod-4),')') 
-                    end
-                   ,case att.attnotnull 
-                      when false then '' 
-                      else 'NOT NULL' 
-                    end,' '
-                   ,case att.atthasdef 
-                      when false then '' 
-                      else concat('DEFAULT ',adef.adsrc) 
-                    end) as rezatt
+  rez := rez||'CREATE TABLE '||l_table_name||' ('||chr(10);
+  for rec in select concat_ws(' ', '  ,'||att.attname,
+                                   case tp.typname 
+                                     when 'int2' then 'smallint' 
+                                     when 'int4' then 'integer' 
+                                     when 'int8' then 'bigint' 
+                                     when 'timestamp' then 'timestamp without time zone' 
+                                     when 'timestamptz' then 'timestamp with time zone' 
+                                     else tp.typname 
+                                   end ||
+                                     case att.atttypmod 
+                                       when -1 then '' 
+                                       else concat('(',(att.atttypmod-4),')') 
+                                     end,
+                                   case when att.attnotnull 
+                                     then 'NOT NULL'
+                                     else null 
+                                   end,
+                                   case when att.atthasdef 
+                                     then concat('DEFAULT ', adef.adsrc)
+                                     else null 
+                                   end) as rezatt
                from pg_attribute att
               inner join pg_type tp on tp.oid = att.atttypid
                left join pg_attrdef adef on adef.adrelid = att.attrelid 
