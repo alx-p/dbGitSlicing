@@ -6,8 +6,8 @@ RETURNS text AS
 $body$
 declare
   l_table_name varchar;
+  l_table_id oid;
 
-  lreloid oid;
   lrelhasoids bool;
   lrelhasindex bool;
   lrelnatts int2;
@@ -38,7 +38,7 @@ begin
 
   select cl.oid,
          cl.relhasoids, cl.relhasindex, cl.relnatts, cl.relchecks, cl.relreplident, cl.relhastriggers 
-    into lreloid,
+    into l_table_id,
          lrelhasoids, lrelhasindex, lrelnatts, lrelchecks, lrelreplident, lrelhastriggers
     from pg_class cl
    inner join pg_namespace ns on ns.oid = cl.relnamespace
@@ -72,7 +72,8 @@ begin
 
   --TABLE
   rez := rez||'CREATE TABLE '||l_table_name||' ('||chr(10);
-  for rec in select concat_ws(' ', '  ,'||att.attname,
+  --  COLUMNS
+  select string_agg(concat_ws(' ', '  ,'||att.attname,
                                    case tp.typname 
                                      when 'int2' then 'smallint' 
                                      when 'int4' then 'integer' 
@@ -92,50 +93,40 @@ begin
                                    case when att.atthasdef 
                                      then concat('DEFAULT ', adef.adsrc)
                                      else null 
-                                   end) as rezatt
+                                   end), chr(10) order by att.attnum) as rezatt
+               into att                    
                from pg_attribute att
               inner join pg_type tp on tp.oid = att.atttypid
                left join pg_attrdef adef on adef.adrelid = att.attrelid 
                                         and adef.adnum = att.attnum
-              where att.attrelid = lreloid
+              where att.attrelid = l_table_id
                 and att.attnum > 0
-              order by att.attnum
-  loop
-    att := att||rec.rezatt||chr(10);
-  end loop;
+              group by att.attrelid;
+  
   att := trim(leading '  ,' from att);
-  rez := rez||'   '||att;
-
-  drop table if exists tempp;
-  create TEMPORARY TABLE tempp(conkey integer, conkeyf integer);
+  rez := rez||'   '||att||chr(10);
 
   --CONSTRAINT PRIMARY KEY
   i := 1;
   if lrelreplident = 'd' then
-    rez := rez||'  ,';
     select concat('CONSTRAINT ', cnst.conname, ' PRIMARY KEY') as f1, cnst.conkey 
       into lf1, lconkeym
       from pg_constraint cnst 
-     where cnst.conrelid = lreloid 
+     where cnst.conrelid = l_table_id 
        and cnst.contype = 'p';
-
-    while lconkeym[i] is not null loop
-      insert into tempp(conkey) (select lconkeym[i]);										  
-      i:=i+1; 
-    end loop;
-
-    rez := rez||lf1;
 
     select concat(' (',string_agg(att.attname,','),')') 
       into lconkey
       from pg_attribute att 
-     where att.attrelid = lreloid
-       and att.attnum in (select conkey from tempp);
+     where att.attrelid = l_table_id
+       and att.attnum = any(lconkeym);
 
-    rez := rez||lconkey||chr(10);
+    rez := rez||'  ,'||lf1||lconkey||chr(10);
   end if;
 
-  delete from tempp;		
+  drop table if exists tempp;
+  create TEMPORARY TABLE tempp(conkey integer, conkeyf integer);
+
   lconkey:=''; 
   for j in 1..i 
   loop 
@@ -146,14 +137,14 @@ begin
   --CONSTRAINT UNIQUE
   if exists (select 1 
                from pg_constraint cnst 
-              where cnst.conrelid = lreloid 
+              where cnst.conrelid = l_table_id 
                 and cnst.contype = 'u') then
     rez:=rez||'  ,';
     for rec in select concat('  ,CONSTRAINT ', cnst.conname, ' UNIQUE') as f1, 
                          cnst.conkey
                     from pg_constraint cnst 
                     left join pg_class cl on cl.oid = cnst.confrelid
-                   where cnst.conrelid = lreloid
+                   where cnst.conrelid = l_table_id
                      and cnst.contype ='u'
     loop
       while rec.conkey[i] is not null loop
@@ -164,7 +155,7 @@ begin
       select concat(' (',string_agg(att.attname,','),') ',ldescr) 
         into lconkey
         from pg_attribute att 
-       where att.attrelid = lreloid 
+       where att.attrelid = l_table_id 
          and att.attnum in (select t.conkey from tempp t where t.conkeyf=0);
 
       rez:=rez||rec.f1||lconkey||chr(10);
@@ -174,12 +165,13 @@ begin
   end if;  
 
   delete from tempp;
-  lconkey:=''; rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
+  lconkey:=''; 
+  rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
 
   --CONSTRAINT FOREIGN KEY
   if exists (select 1 
                from pg_constraint cnst 
-              where cnst.conrelid = lreloid 
+              where cnst.conrelid = l_table_id 
                 and cnst.contype = 'f') then
     rez:=rez||'  ,';
 
@@ -209,7 +201,7 @@ begin
                          ,cnst.conkey, cnst.confkey, cl.oid
                     from pg_constraint cnst 
                     left join pg_class cl on cl.oid = cnst.confrelid
-                   where cnst.conrelid = lreloid
+                   where cnst.conrelid = l_table_id
                      and cnst.contype = 'f'
     loop
       while rec.conkey[i] is not null loop
@@ -225,7 +217,7 @@ begin
       select concat(' (',string_agg(att.attname,','),') ',ldescr) 
         into lconkey
         from pg_attribute att 
-       where att.attrelid = lreloid 
+       where att.attrelid = l_table_id 
          and att.attnum in (select t.conkey from tempp t where t.conkeyf=0);
 
       select concat(' (',string_agg(att.attname,','),') ',ldescr) 
@@ -251,7 +243,7 @@ begin
     select concat('CONSTRAINT ',cnst.conname,' CHECK') as f1, cnst.conkey, cnst.consrc
       into lf1, lconkeym, ldescr
       from pg_constraint cnst 
-     where cnst.conrelid = lreloid 
+     where cnst.conrelid = l_table_id 
        and cnst.contype = 'c';
 
     while lconkeym[i] is not null loop
@@ -264,7 +256,7 @@ begin
     select concat(' (',string_agg(att.attname,','),') ',ldescr) 
       into lconkey
       from pg_attribute att 
-     where att.attrelid = lreloid 
+     where att.attrelid = l_table_id 
        and att.attnum in (select conkey from tempp);
 
     rez:=rez||lconkey||chr(10);
@@ -283,7 +275,7 @@ begin
   --COMMENTS
   if exists (select 1 
                from pg_description des 
-              where des.objoid = lreloid) then
+              where des.objoid = l_table_id) then
 
     for rec in select des.objsubid, des.description 
                      ,case des.objsubid when 0 
@@ -292,8 +284,8 @@ begin
                       end as f1
                  from pg_description des
                  left join pg_attribute att on att.attnum = des.objsubid 
-                                           and att.attrelid = lreloid
-                where des.objoid = lreloid
+                                           and att.attrelid = l_table_id
+                where des.objoid = l_table_id
                 order by 1
     loop
       rez:=rez||rec.f1||chr(10)||chr(10);		   
@@ -306,7 +298,7 @@ begin
                     from pg_index idx
                    inner join pg_class cl on cl.oid = idx.indexrelid
                    inner join pg_am am on am.oid = cl.relam
-                   where idx.indrelid = lreloid
+                   where idx.indrelid = l_table_id
                      and idx.indisprimary = false 
                    order by 1
     loop
@@ -334,7 +326,7 @@ begin
                     from pg_trigger tr
                    inner join pg_proc pr on pr.oid = tr.tgfoid
                    where tr.tgisinternal = false 
-                     and tr.tgrelid = lreloid
+                     and tr.tgrelid = l_table_id
     loop
       lconkey:=lconkey||'CREATE TRIGGER '||rec.tgname||chr(10)||rec.f1||chr(10)||' ON '||p_schema_name||'.'||p_table_name||chr(10)||
                ' FOR EACH ROW '||chr(10)||'EXECUTE PROCEDURE '||p_schema_name||'.'||rec.proname||'('||rec.f2||');'||chr(10);
@@ -353,7 +345,7 @@ begin
 
     for rec in select att.attname, att.attnum
                  from pg_attribute att
-                where att.attrelid = lreloid
+                where att.attrelid = l_table_id
                   and att.attnum > 0
                 order by att.attnum
     loop
