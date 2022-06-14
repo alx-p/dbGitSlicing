@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION public.get_table_ddl (
+﻿CREATE OR REPLACE FUNCTION public.get_table_ddl (
   p_schema_name varchar,
   p_table_name varchar
 )
@@ -7,6 +7,7 @@ $body$
 declare
   l_table_name varchar;
   l_table_id oid;
+  l_conkey_arr smallint[];
 
   lrelhasoids bool;
   lrelhasindex bool;
@@ -20,11 +21,11 @@ declare
   con text;
   rec record;
   lconkey text;
-  lconkeym smallint[];
+--  lconkeym smallint[];
   lconkeyf text;
   lf1 text;
-  i integer;
-  j integer;
+--  i integer;
+--  j integer;
   ldescr text;
   pclmn text;
   pclmnnotype text;
@@ -107,10 +108,9 @@ begin
   rez := rez||'   '||att||chr(10);
 
   --CONSTRAINT PRIMARY KEY
-  i := 1;
   if lrelreplident = 'd' then
-    select concat('CONSTRAINT ', cnst.conname, ' PRIMARY KEY') as f1, cnst.conkey 
-      into lf1, lconkeym
+    select concat('CONSTRAINT ', cnst.conname, ' PRIMARY KEY'), cnst.conkey 
+      into lf1, l_conkey_arr
       from pg_constraint cnst 
      where cnst.conrelid = l_table_id 
        and cnst.contype = 'p';
@@ -119,52 +119,36 @@ begin
       into lconkey
       from pg_attribute att 
      where att.attrelid = l_table_id
-       and att.attnum = any(lconkeym);
+       and att.attnum = any(l_conkey_arr);
 
     rez := rez||'  ,'||lf1||lconkey||chr(10);
   end if;
-
-  drop table if exists tempp;
-  create TEMPORARY TABLE tempp(conkey integer, conkeyf integer);
-
-  lconkey:=''; 
-  for j in 1..i 
-  loop 
-    lconkeym[j] := null; 
-  end loop;
-  i:=1; j:=1; lf1 := null;
-    
+   
   --CONSTRAINT UNIQUE
   if exists (select 1 
                from pg_constraint cnst 
               where cnst.conrelid = l_table_id 
                 and cnst.contype = 'u') then
+
     rez:=rez||'  ,';
     for rec in select concat('  ,CONSTRAINT ', cnst.conname, ' UNIQUE') as f1, 
-                         cnst.conkey
-                    from pg_constraint cnst 
-                    left join pg_class cl on cl.oid = cnst.confrelid
-                   where cnst.conrelid = l_table_id
-                     and cnst.contype ='u'
+                      cnst.conkey
+                 from pg_constraint cnst 
+                 left join pg_class cl on cl.oid = cnst.confrelid
+                where cnst.conrelid = l_table_id
+                  and cnst.contype = 'u'
     loop
-      while rec.conkey[i] is not null loop
-        insert into tempp(conkey,conkeyf) (select rec.conkey[i],0);										  
-        i:=i+1; 
-      end loop;
-
       select concat(' (',string_agg(att.attname,','),') ',ldescr) 
         into lconkey
         from pg_attribute att 
        where att.attrelid = l_table_id 
-         and att.attnum in (select t.conkey from tempp t where t.conkeyf=0);
+         and att.attnum = any(rec.conkey);
 
-      rez:=rez||rec.f1||lconkey||chr(10);
-      i:=1;
-      delete from tempp;
+      rez := rez||rec.f1||lconkey||chr(10);
     end loop;
   end if;  
 
-  delete from tempp;
+
   lconkey:=''; 
   rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
 
@@ -181,7 +165,7 @@ begin
                             else concat('     REFERENCES ',p_schema_name,'.',cl.relname) 
                           end as f2
                          ,concat((case cnst.confmatchtype 
-                                    when 'f' then ' MATCH FULL' 
+                                    when 'f' then 'MATCH FULL' 
                                     when 'p' then 'MATCH PARTIAL' 
                                     when 's' then 'MATCH SIMPLE' 
                                     else '' 
@@ -204,52 +188,36 @@ begin
                    where cnst.conrelid = l_table_id
                      and cnst.contype = 'f'
     loop
-      while rec.conkey[i] is not null loop
-        insert into tempp(conkey,conkeyf) (select rec.conkey[i],0);										  
-        i:=i+1; 
-      end loop;
-
-      while rec.confkey[j] is not null loop
-        insert into tempp(conkey,conkeyf) (select rec.confkey[j],1);										  
-        j:=j+1; 
-      end loop;
-
       select concat(' (',string_agg(att.attname,','),') ',ldescr) 
         into lconkey
         from pg_attribute att 
        where att.attrelid = l_table_id 
-         and att.attnum in (select t.conkey from tempp t where t.conkeyf=0);
+         and att.attnum = any(rec.conkey);
 
       select concat(' (',string_agg(att.attname,','),') ',ldescr) 
         into lconkeyf
         from pg_attribute att 
        where att.attrelid = rec.oid 
-         and att.attnum in (select t.conkey from tempp t  where t.conkeyf=1);
+         and att.attnum = any(rec.confkey);
 
       rez:=rez||rec.f1||lconkey||chr(10)||rec.f2||lconkeyf||rec.f3||chr(10);
-      i:=1;
-      j:=1;
-      delete from tempp;
     end loop;
   end if;  
 
-  delete from tempp;
-  lconkey:=''; lconkeyf:=''; rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
+  lf1 := null;
+
+  lconkey:=''; lconkeyf:=''; 
+  rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
   				   
   --CONSTRAINT CHECK
   if lrelchecks then
     rez:=rez||'  ,';
 
-    select concat('CONSTRAINT ',cnst.conname,' CHECK') as f1, cnst.conkey, cnst.consrc
-      into lf1, lconkeym, ldescr
+    select concat('CONSTRAINT ',cnst.conname,' CHECK'), cnst.conkey, cnst.consrc
+      into lf1, l_conkey_arr, ldescr
       from pg_constraint cnst 
      where cnst.conrelid = l_table_id 
        and cnst.contype = 'c';
-
-    while lconkeym[i] is not null loop
-      insert into tempp(conkey) (select lconkeym[i]);										  
-      i:=i+1; 
-    end loop;
 
     rez:=rez||lf1;
 
@@ -257,14 +225,14 @@ begin
       into lconkey
       from pg_attribute att 
      where att.attrelid = l_table_id 
-       and att.attnum in (select conkey from tempp);
+       and att.attnum = any(l_conkey_arr); --in (select conkey from tempp);
 
     rez:=rez||lconkey||chr(10);
   end if;
 
-  delete from tempp;
-
-  lconkey:=''; for j in 1..i loop lconkeym[j]:=null; end loop;i:=1;j:=1;lf1:=null;ldescr:=null;		   
+  lconkey:=''; 
+  lf1:=null;
+  ldescr:=null;		   
 
   if lrelhasoids then 
     rez:=rez||') WITH OIDS);'||chr(10); 
@@ -302,7 +270,7 @@ begin
                      and idx.indisprimary = false 
                    order by 1
     loop
-      lconkey:=lconkey||'CREATE INDEX '||rec.relname||chr(10)||'  ON '||p_schema_name||'.'||p_table_name||chr(10)||'  USING '||upper(rec.amname)||' ('||rec.indnatts||' key) '||'TABLESPACE pg_default;'||chr(10);
+      lconkey:=lconkey||'CREATE INDEX '||rec.relname||chr(10)||' ON '||l_table_name||chr(10)||' USING '||upper(rec.amname)||' ('||rec.indnatts||' key) '||'TABLESPACE pg_default;'||chr(10);
     end loop;
     rez:=rez||lconkey;lconkey:='';
   end if;
@@ -349,8 +317,10 @@ begin
                   and att.attnum > 0
                 order by att.attnum
     loop
-      if rec.attnum=1 then psort:=rec.attname; end if;
-      pclmn:=pclmn||', '||rec.attname;
+      if rec.attnum = 1 then 
+        psort := rec.attname; 
+      end if;
+      pclmn := pclmn||', '||rec.attname;
       execute 'select max(length(coalesce(cast('||rec.attname||' as varchar),''null''))) as integer from '||p_schema_name||'.'||p_table_name into pmaxlen;
       pclmnnotype:=pclmnnotype||'rpad((coalesce(cast('||rec.attname||' as varchar),''null'')),'||pmaxlen+2||')||'',''||';
     end loop;
