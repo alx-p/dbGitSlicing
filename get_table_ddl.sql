@@ -130,27 +130,27 @@ begin
               where cnst.conrelid = l_table_id 
                 and cnst.contype = 'u') then
 
-    rez:=rez||'  ,';
-    for rec in select concat('  ,CONSTRAINT ', cnst.conname, ' UNIQUE') as f1, 
+    --rez:=rez||'  ,';
+    for rec in select concat('  ,CONSTRAINT ', cnst.conname, ' UNIQUE') conname, 
                       cnst.conkey
                  from pg_constraint cnst 
                  left join pg_class cl on cl.oid = cnst.confrelid
                 where cnst.conrelid = l_table_id
                   and cnst.contype = 'u'
     loop
-      select concat(' (',string_agg(att.attname,','),') ',ldescr) 
+      select concat(' (',string_agg(att.attname,',' order by att.attnum),') ',ldescr) 
         into lconkey
         from pg_attribute att 
        where att.attrelid = l_table_id 
          and att.attnum = any(rec.conkey);
 
-      rez := rez||rec.f1||lconkey||chr(10);
+      rez := rez||rec.conname||lconkey||chr(10);
     end loop;
   end if;  
 
 
   lconkey:=''; 
-  rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
+  --rez:=replace(rez, ',  ,CONSTRAINT',',CONSTRAINT');
 
   --CONSTRAINT FOREIGN KEY
   if exists (select 1 
@@ -304,6 +304,11 @@ begin
 
   --DATA
   if exists (select 1 
+               from information_schema.tables 
+              where table_schema = 'common'
+                and table_name = 'spr_reposit')
+  then 
+    if exists (select 1 
                from common.spr_reposit 
               where nspname = p_schema_name 
                 and relname = p_table_name) then
@@ -321,25 +326,37 @@ begin
         psort := rec.attname; 
       end if;
       pclmn := pclmn||', '||rec.attname;
-      execute 'select max(length(coalesce(cast('||rec.attname||' as varchar),''null''))) as integer from '||p_schema_name||'.'||p_table_name into pmaxlen;
-      pclmnnotype:=pclmnnotype||'rpad((coalesce(cast('||rec.attname||' as varchar),''null'')),'||pmaxlen+2||')||'',''||';
+      execute 'select max(coalesce(length('||rec.attname||'::varchar),4)) from '||l_table_name into pmaxlen;
+      if pmaxlen is null then
+        exit;
+      end if;  
+      pclmnnotype:=pclmnnotype||'rpad((coalesce('||rec.attname||'::varchar,''null'')),'||pmaxlen+2||')||'',''||';
     end loop;
 
-    pclmn:=trim(leading ', ' from pclmn);
-    pclmnnotype:=trim(trailing '||'',''|| ' from pclmnnotype);
-    pdata:='insert into '||p_schema_name||'.'||p_table_name||'('||pclmn||') values '||chr(10);
-    execute 'insert into tmpdat (valchar) (select '||pclmnnotype||' from '||p_schema_name||'.'||p_table_name||' order by '||psort||')';
-    for rec in select valchar from tmpdat
-    loop
-      pdata:=pdata||'( '||rec.valchar||'),'||chr(10);
-    end loop;
+    if pmaxlen is not null then
+      pclmn:=trim(leading ', ' from pclmn);
+      pclmnnotype:=trim(trailing '||'',''|| ' from pclmnnotype);
+      pdata:='insert into '||l_table_name||'('||pclmn||') values '||chr(10);
+      execute 'insert into tmpdat (valchar) (select '||pclmnnotype||' from '||l_table_name||' order by '||psort||')';
+      for rec in select valchar from tmpdat
+      loop
+        pdata:=pdata||'( '||rec.valchar||'),'||chr(10);
+      end loop;
+    else
+      pdata := 'Данные не найдены';
+    end if;  
     rez:=rez||pdata;
-    pdata:='';
+    pdata:='';    
+  end if;
   end if;
 
   --raise info 'rez-%',rez;
 
   return rez;
+
+exception
+  when others then
+    return sqlerrm;
 end;
 $body$
 LANGUAGE 'plpgsql'
