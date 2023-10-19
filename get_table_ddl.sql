@@ -121,7 +121,7 @@ begin
      where att.attrelid = l_table_id
        and att.attnum = any(l_conkey_arr);
 
-    rez := rez||'  ,'||lf1||lconkey||chr(10);
+    rez := concat_ws(chr(10), rez, '  ,'||lf1||lconkey); -- rez||'  ,'||lf1||lconkey||chr(10);
   end if;
    
   --CONSTRAINT UNIQUE
@@ -316,13 +316,15 @@ begin
     drop table if exists tmpdat;
     create temporary table tmpdat(valchar varchar);  
 
-    for rec in select att.attname, att.attnum
+    for rec in select att.attname, att.attnum,
+                      row_number() over () rn
                  from pg_attribute att
                 where att.attrelid = l_table_id
                   and att.attnum > 0
+                  and att.atttypid <> 0
                 order by att.attnum
     loop
-      if rec.attnum = 1 then 
+      if rec.rn = 1 then 
         psort := rec.attname; 
       end if;
       pclmn := pclmn||', '||rec.attname;
